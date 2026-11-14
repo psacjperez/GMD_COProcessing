@@ -1163,6 +1163,10 @@ def build_counter_check(detected, remaining, checked_kinds, name, bgy_info=None)
                 continue
             stats["detected"] += 1
             attrs = {n: f[n] for n, _ in CHECKER_SCHEMA if n in lnames}
+            # A loaded MBI layer can mix types: each feature's own mbi_type wins.
+            fkind = _norm_type(_text(f, MBI_TYPE)) if MBI_TYPE in lnames else ""
+            if fkind not in ("Gap", "Overlap", "Disputed"):
+                fkind = kind
             if not _text(f, MBI_TYPE):
                 attrs[MBI_TYPE] = kind
             if remaining is not None:
@@ -1171,7 +1175,7 @@ def build_counter_check(detected, remaining, checked_kinds, name, bgy_info=None)
                 hits = []
                 for rid in index.intersects(g.boundingBox()):
                     r = refs.get(rid)
-                    if r is None or r["kind"] not in ("", "Disputed", kind) \
+                    if r is None or r["kind"] not in ("", "Disputed", fkind) \
                             or not engine.intersects(r["geom"].constGet()):
                         continue
                     if _area(_polygonal(g.intersection(r["geom"])), da) > MATCH_MIN_M2:
@@ -1822,7 +1826,9 @@ def make_dialog_class():
                 self.setWindowIcon(QIcon(icon))
             self.setWindowFlags(self.windowFlags()
                                 | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint)
-            self.setAttribute(Qt.WA_DeleteOnClose, True)
+            # Not deleted on close: closing only hides the window, so reopening the tool
+            # resumes the loaded cases and ticks (see show_dialog).
+            self.setAttribute(Qt.WA_DeleteOnClose, False)
             self.setMinimumSize(860, 560)
             self.resize(1100, 740)
 
@@ -1862,8 +1868,15 @@ def make_dialog_class():
 
             close_row = QtWidgets.QHBoxLayout()
             close_row.addStretch()
+            min_btn = QtWidgets.QPushButton("Minimize")
+            min_btn.setMinimumWidth(100)
+            min_btn.setToolTip("Minimize this window; your work stays as it is.")
+            min_btn.clicked.connect(self.showMinimized)
+            close_row.addWidget(min_btn)
             close_btn = QtWidgets.QPushButton("Close")
             close_btn.setMinimumWidth(100)
+            close_btn.setToolTip("Hide this window. Open the tool again to resume where you left off\n"
+                                 "(loaded cases and ticks are kept until QGIS is closed).")
             close_btn.clicked.connect(self.close)
             close_row.addWidget(close_btn)
             root.addLayout(close_row)
@@ -1893,13 +1906,13 @@ def make_dialog_class():
             ll.setContentsMargins(0, 0, 4, 0)
             ll.setSpacing(6)
 
-            box, lay = group("Remaining MBI Layer (declared pending)")
+            box, lay = group("Remaining MBI Layer")
             rrow = QtWidgets.QHBoxLayout()
             self.remaining_combo = layer_combo(polygon_filter)
             self.remaining_combo.setToolTip(
                 "The MBIs the PSOs declared pending — e.g. 'remaining_cases' of the MBI Validator's\n"
-                "ref_mbi_reviewed GeoPackage, or a ref_mbi_cases layer. Run Check compares every\n"
-                "MBI the check finds with these.")
+                "ref_mbi_reviewed GeoPackage, or a ref_mbi_cases layer. Load MBI Cases compares\n"
+                "every MBI of the MBI Layer with these (counter-check).")
             rrow.addWidget(self.remaining_combo, 1)
             self.browse_btn = QtWidgets.QToolButton()
             self.browse_btn.setIcon(QgsApplication.getThemeIcon("/mActionFileOpen.svg"))
@@ -1910,6 +1923,41 @@ def make_dialog_class():
             lay.addLayout(rrow)
             self.remaining_hint = self._hint()
             lay.addWidget(self.remaining_hint)
+            ll.addWidget(box)
+
+            box, lay = group("MBI Layer")
+            self.mbi_combo = layer_combo(polygon_filter)
+            self.mbi_combo.setToolTip("An existing MBI layer (e.g. a ppp_mbi layer made permanent),\n"
+                                      "or any Gaps / Overlaps layer with 'case_uuid'.")
+            lay.addWidget(self.mbi_combo)
+            self.mbi_hint = self._hint()
+            lay.addWidget(self.mbi_hint)
+            self.selected_only = QtWidgets.QCheckBox("Only selected MBI features")
+            self.selected_only.setToolTip("Load only the cases of the features selected on the map.")
+            lay.addWidget(self.selected_only)
+            self.preload_check = QtWidgets.QCheckBox("Resume saved coverage choices")
+            self.preload_check.setChecked(True)
+            self.preload_check.setToolTip("Pre-tick barangays from the coverage field already in the MBI layer.")
+            lay.addWidget(self.preload_check)
+            ll.addWidget(box)
+
+            box, lay = group("Building Points")
+            self.bldg_combo = layer_combo(point_filter)
+            lay.addWidget(self.bldg_combo)
+            frow = QtWidgets.QHBoxLayout()
+            frow.addWidget(QtWidgets.QLabel("Geocode field:"))
+            self.bldg_field_combo = QgsFieldComboBox()
+            self.bldg_field_combo.setAllowEmptyFieldName(True)
+            self.bldg_field_combo.setToolTip(
+                "Building point field holding the barangay geocode (or an EA geocode, which starts\n"
+                "with it). Each building inside an MBI is credited to the involved barangay whose\n"
+                "geocode equals — or begins — the value.")
+            frow.addWidget(self.bldg_field_combo, 1)
+            lay.addLayout(frow)
+            self.bldg_combo.layerChanged.connect(self._on_bldg_layer)
+            self.bldg_field_combo.fieldChanged.connect(self.validate_inputs)
+            self.bldg_hint = self._hint()
+            lay.addWidget(self.bldg_hint)
             ll.addWidget(box)
 
             box, lay = group("Barangay Layers")
@@ -1933,32 +1981,7 @@ def make_dialog_class():
             lay.addWidget(self.layer_count_label)
             self.bgy_hint = self._hint()
             lay.addWidget(self.bgy_hint)
-            self.skip_within = QtWidgets.QCheckBox("Skip within-barangay cases")
-            self.skip_within.setChecked(True)
-            self.skip_within.setToolTip(
-                "Leave out cases that involve a single barangay (e.g. gaps / overlaps between\n"
-                "EAs of the same barangay in an EA MBI layer) — there is no barangay to choose.")
-            lay.addWidget(self.skip_within)
             ll.addWidget(box, 1)
-
-            box, lay = group("Building Points")
-            self.bldg_combo = layer_combo(point_filter)
-            lay.addWidget(self.bldg_combo)
-            frow = QtWidgets.QHBoxLayout()
-            frow.addWidget(QtWidgets.QLabel("Geocode field:"))
-            self.bldg_field_combo = QgsFieldComboBox()
-            self.bldg_field_combo.setAllowEmptyFieldName(True)
-            self.bldg_field_combo.setToolTip(
-                "Building point field holding the barangay geocode (or an EA geocode, which starts\n"
-                "with it). Each building inside an MBI is credited to the involved barangay whose\n"
-                "geocode equals — or begins — the value.")
-            frow.addWidget(self.bldg_field_combo, 1)
-            lay.addLayout(frow)
-            self.bldg_combo.layerChanged.connect(self._on_bldg_layer)
-            self.bldg_field_combo.fieldChanged.connect(self.validate_inputs)
-            self.bldg_hint = self._hint()
-            lay.addWidget(self.bldg_hint)
-            ll.addWidget(box)
 
             box, lay = group("Run MBI Check && Counter-Check")
             self.run_box = box
@@ -1987,29 +2010,18 @@ def make_dialog_class():
             lay.addWidget(self.run_btn)
             self.run_hint = self._hint()
             lay.addWidget(self.run_hint)
+            # Hidden: the users load an existing MBI layer, so no check is run here.
+            box.setVisible(False)
             ll.addWidget(box)
 
-            box, lay = group("Or Load an Existing MBI Layer")
-            self.mbi_combo = layer_combo(polygon_filter)
-            self.mbi_combo.setToolTip("A ppp_mbi layer from an earlier run (e.g. made permanent),\n"
-                                      "or any Gaps / Overlaps layer with 'case_uuid'. Run Check fills this in.")
-            lay.addWidget(self.mbi_combo)
-            self.mbi_hint = self._hint()
-            lay.addWidget(self.mbi_hint)
-            self.selected_only = QtWidgets.QCheckBox("Only selected MBI features")
-            self.selected_only.setToolTip("Load only the cases of the features selected on the map.")
-            lay.addWidget(self.selected_only)
-            self.preload_check = QtWidgets.QCheckBox("Resume saved coverage choices")
-            self.preload_check.setChecked(True)
-            self.preload_check.setToolTip("Pre-tick barangays from the coverage field already in the MBI layer.")
-            lay.addWidget(self.preload_check)
             self.load_btn = button("Load MBI Cases")
-            self.load_btn.setToolTip("Read the MBI layer picked above (no new check) and list each\n"
-                                     "case with all of its involved barangays.")
+            self.load_btn.setToolTip("Counter-check the MBI Layer against the Remaining MBI layer (Still /\n"
+                                     "Newly / No longer detected — adds a 'ppp_mbi' layer), then list each\n"
+                                     "case with all of its involved barangays. An MBI layer that is already\n"
+                                     "counter-checked, or no Remaining MBI layer, is loaded as it is.")
             self.load_btn.setObjectName("loadBtn")
             self.load_btn.clicked.connect(lambda: self.load_cases())
-            lay.addWidget(self.load_btn)
-            ll.addWidget(box)
+            ll.addWidget(self.load_btn)
 
             r1 = QtWidgets.QHBoxLayout()
             self.cancel_btn = button("Cancel", 32, BTN_CANCEL)
@@ -2154,13 +2166,6 @@ def make_dialog_class():
             self.folder_hint = self._hint()
             gf.addWidget(self.folder_hint)
             arow = QtWidgets.QHBoxLayout()
-            self.auto_btn = button("Auto-Assign Pending", 32)
-            self.auto_btn.setToolTip(
-                "Single-barangay cases go to that barangay. Multi-barangay cases go to the\n"
-                "barangay that owns most of the buildings inside the MBI (needs Building Points +\n"
-                "geocode field); shared overlaps go to every barangay with tagged buildings, most\n"
-                "first, each keeping its own part. No tagged buildings or a tie stays pending.")
-            self.auto_btn.clicked.connect(self.auto_assign)
             self.reset_btn = button("Reset Choices", 32, BTN_CANCEL)
             self.reset_btn.setToolTip("Clear every barangay tick in the viewer (nothing is written).")
             self.reset_btn.clicked.connect(self.reset_choices)
@@ -2186,7 +2191,6 @@ def make_dialog_class():
                 "to a GeoPackage, plus a CSV of every case / barangay decision, into the Export folder.\n"
                 "Choices not yet applied are applied first.")
             self.export_btn.clicked.connect(self.export_results)
-            arow.addWidget(self.auto_btn, 1)
             arow.addWidget(self.reset_btn, 1)
             arow.addWidget(self.apply_btn, 2)
             arow.addWidget(self.join_btn, 2)
@@ -2337,12 +2341,22 @@ def make_dialog_class():
                     pass
 
         def done(self, result):
-            self._teardown()
+            # Close / Esc only hides the window (work is resumed on reopen): just drop the
+            # map highlights. Signals are released with the window when QGIS exits.
+            self.clear_bands()
             super().done(result)
 
         def closeEvent(self, event):
-            self._teardown()
+            self.clear_bands()
             super().closeEvent(event)
+
+        def resume(self):
+            """Bring a hidden / minimized window back with its work intact."""
+            self.refresh_bgy_list()
+            self.validate_inputs()
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
 
         # ──────────────── barangay layer list (multi-select) ────────────────
         def _bgy_items(self):
@@ -2445,12 +2459,11 @@ def make_dialog_class():
             ok = True
             mbi = self.mbi_combo.currentLayer()
             if mbi is None:
-                self.set_hint(self.mbi_hint, "Optional: Run Check fills this in. Pick a layer here only "
-                                             "to reopen an earlier result.")
+                self.set_hint(self.mbi_hint, "Pick the MBI layer to load.")
                 ok = False
             elif "case_uuid" not in field_names(mbi):
-                self.set_hint(self.mbi_hint, "Missing 'case_uuid' field — use Run Check & "
-                                             "Counter-Check to produce an MBI layer.", "error")
+                self.set_hint(self.mbi_hint, "Missing 'case_uuid' field — is this an MBI layer?",
+                              "error")
                 ok = False
             else:
                 kind = infer_mbi_type(mbi.name())
@@ -2461,7 +2474,7 @@ def make_dialog_class():
             remaining = self.remaining_combo.currentLayer()
             if remaining is None:
                 self.set_hint(self.remaining_hint, "Pick the remaining MBI layer (or Browse GPKG…). "
-                                                   "Without it Run Check only lists what it finds — "
+                                                   "Without it the MBI Layer is loaded as it is — "
                                                    "nothing is counter-checked.")
             elif not _pick_field(remaining, REF_SOURCES["case_uuid"]):
                 self.set_hint(self.remaining_hint, "No 'case_uuid' field — is this a remaining MBI "
@@ -2596,7 +2609,7 @@ def make_dialog_class():
             self.cancel_requested = False
             for w in (self.mbi_combo, self.bgy_list, self.btn_all, self.btn_none, self.bldg_combo,
                       self.remaining_combo, self.browse_btn,
-                      self.selected_only, self.preload_check, self.skip_within, self.tree,
+                      self.selected_only, self.preload_check, self.tree,
                       self.search_edit,
                       self.show_combo, self.clear_btn, self.mode_combo, self.bldg_field_combo):
                 w.setEnabled(not busy)
@@ -2800,10 +2813,73 @@ def make_dialog_class():
             if cats:
                 layer.setRenderer(QgsCategorizedSymbolRenderer(field, cats))
 
+        def counter_check_loaded(self, mbi, remaining, only_fids=None):
+            """Counter-check a loaded MBI layer (no 'detection' field yet) against the remaining
+            MBI layer: adds the ppp_mbi layer (one row per involved barangay, with Still / Newly /
+            No longer detected) and returns it, or None when there is nothing to list."""
+            source = mbi
+            if only_fids:
+                source = mbi.materialize(QgsFeatureRequest().setFilterFids(list(only_fids)))
+            kinds = set()
+            if source.fields().indexOf(MBI_TYPE) >= 0:
+                for f in source.getFeatures(QgsFeatureRequest().setSubsetOfAttributes(
+                        [MBI_TYPE], source.fields()).setFlags(QgsFeatureRequest.NoGeometry)):
+                    k = _norm_type(_text(f, MBI_TYPE))
+                    if k in ("Gap", "Overlap", "Disputed"):
+                        kinds.add(k)
+            default_kind = infer_mbi_type(mbi.name()) or ""
+            if default_kind:
+                kinds.add(default_kind)
+            if not kinds:
+                kinds = {"Gap", "Overlap", "Disputed"}
+            self.log(f"Counter-checking '{mbi.name()}' against '{remaining.name()}' "
+                     f"({', '.join(sorted(kinds))})…")
+            self.summary.setText(f"Counter-checking against '{remaining.name()}'…")
+            QtWidgets.QApplication.processEvents()
+            bgy_info, provinces = read_bgy_info(self.bgy_layers())
+            result, stats = build_counter_check([(source, default_kind)], remaining, kinds,
+                                                mbi_output_name(provinces), bgy_info)
+            self._log_counter_check(remaining, stats, kinds)
+            if result is None:
+                self.log("  Nothing to list after the counter-check.")
+                return None
+            self._style_results(result)
+            QgsProject.instance().addMapLayer(result)
+            self.log(f"  Added layer '{result.name()}' ({result.featureCount():,} row(s)). It is a "
+                     "temporary layer — right-click > Make Permanent to keep it.")
+            return result
+
         def load_cases(self, use_selection=True):
             if self.running or not self.validate_inputs():
                 return
             mbi = self.mbi_combo.currentLayer()
+            remaining = self.remaining_combo.currentLayer()
+            if remaining is not None and DETECT_FIELD not in field_names(mbi):
+                fids = None
+                if use_selection and self.selected_only.isChecked():
+                    fids = mbi.selectedFeatureIds()
+                    if not fids:
+                        QtWidgets.QMessageBox.warning(
+                            self, DIALOG_TITLE, f"No features are selected in '{mbi.name()}'.")
+                        return
+                if not self._unapplied_ok("Load MBI Cases"):
+                    return
+                self.log("=" * 50)
+                try:
+                    result = self.counter_check_loaded(mbi, remaining, fids)
+                except Exception as e:
+                    self.log(traceback.format_exc().rstrip())
+                    self.log(f"Counter-check FAILED: {e}")
+                    self.update_summary()
+                    return
+                if result is None:
+                    self.update_summary()
+                    return
+                self.mbi_combo.setLayer(result)
+                mbi = result
+                use_selection = False
+                if not self.validate_inputs():
+                    return
             bgys = [l for l in self.bgy_layers() if _pick_field(l, BGY_GEOCODE_FIELDS)]
             bldg = self.bldg_combo.currentLayer()
             bldg_field = self.bldg_field()
@@ -2834,7 +2910,7 @@ def make_dialog_class():
                 cases, skipped = load_mbi_cases(
                     mbi, infer_mbi_type(mbi.name()), only_fids, preload,
                     tick=lambda d, t: self.tick(d, t * 2 if bldg else t, "Reading MBI cases…"),
-                    skip_within=self.skip_within.isChecked())
+                    skip_within=False)
                 involved = {c for case in cases.values() if not case.gone for c in case.candidates}
                 self.log(f"  {len(cases):,} case(s) involving {len(involved):,} barangay(s)")
                 det = {}
@@ -3545,46 +3621,6 @@ def make_dialog_class():
             menu.addAction("Collapse all", self.tree.collapseAll)
             menu.exec_(self.tree.viewport().mapToGlobal(pos))
 
-        # ──────────────── auto-assign ────────────────
-        def auto_assign(self):
-            single = by_bldg = shared = left = 0
-            for case in self.cases.values():
-                if case.assigned or not case.candidates or case.gone:
-                    continue
-                cands = list(case.candidates.values())
-                if len(cands) == 1:
-                    self.set_assignment(case, [cands[0].code], quiet=True)
-                    single += 1
-                elif not all(c.bldg is not None for c in cands):
-                    left += 1
-                elif case.split:
-                    # Every barangay with tagged buildings keeps its part, most buildings first.
-                    owners = sorted((c for c in cands if c.bldg), key=lambda c: -c.bldg)
-                    if owners:
-                        self.set_assignment(case, [c.code for c in owners], quiet=True)
-                        shared += 1
-                    else:
-                        left += 1
-                else:
-                    most = max(c.bldg for c in cands)
-                    leaders = [c for c in cands if c.bldg == most]
-                    if most > 0 and len(leaders) == 1:
-                        self.set_assignment(case, [leaders[0].code], quiet=True)
-                        by_bldg += 1
-                    else:
-                        left += 1
-            partial = sum(1 for c in self.cases.values() if c.status == "partial")
-            self.log(f"Auto-assign: {single:,} single-barangay case(s), {by_bldg:,} to the barangay owning most "
-                     "of the buildings inside the MBI"
-                     + (f", {shared:,} shared overlap(s) to every barangay with tagged buildings "
-                        "(each keeps its part)" if shared else "")
-                     + (f", {left:,} left pending (no tagged buildings, a tie, or no building "
-                        "counts)" if left else "")
-                     + (f". {partial:,} case(s) are only partly covered — review them "
-                        "(Show: Partly covered)." if partial else ""))
-            self.apply_filter()
-            self.on_selection_changed()
-
         # ──────────────── apply ────────────────
         def _case_status(self, case):
             return {"covered": STATUS_COVERED, "partial": STATUS_PARTIAL}.get(
@@ -4098,8 +4134,13 @@ def show_dialog():
     main = qgis_iface.mainWindow() if qgis_iface is not None else None
 
     if main is not None:
+        # Resume a window that was closed (hidden) or minimized, keeping its work.
         for old in main.findChildren(QDialog, DIALOG_NAME):
+            if hasattr(old, "resume"):
+                old.resume()
+                return old
             old.close()
+            old.deleteLater()
 
     dialog = make_dialog_class()(qgis_iface, main)
     dialog.show()

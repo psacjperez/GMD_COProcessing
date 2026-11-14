@@ -1157,7 +1157,9 @@ def make_dialog_class():
                 self.setWindowIcon(QIcon(icon))
             self.setWindowFlags(self.windowFlags()
                                 | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint)
-            self.setAttribute(Qt.WA_DeleteOnClose, True)
+            # Not deleted on close: closing only hides the window, so reopening the tool
+            # resumes the loaded cases and ticks (see show_dialog).
+            self.setAttribute(Qt.WA_DeleteOnClose, False)
             self.setMinimumSize(860, 560)
             self.resize(1100, 740)
 
@@ -1199,8 +1201,15 @@ def make_dialog_class():
 
             close_row = QtWidgets.QHBoxLayout()
             close_row.addStretch()
+            min_btn = QtWidgets.QPushButton("Minimize")
+            min_btn.setMinimumWidth(100)
+            min_btn.setToolTip("Minimize this window; your work stays as it is.")
+            min_btn.clicked.connect(self.showMinimized)
+            close_row.addWidget(min_btn)
             close_btn = QtWidgets.QPushButton("Close")
             close_btn.setMinimumWidth(100)
+            close_btn.setToolTip("Hide this window. Open the tool again to resume where you left off\n"
+                                 "(loaded cases and ticks are kept until QGIS is closed).")
             close_btn.clicked.connect(self.close)
             close_row.addWidget(close_btn)
             root.addLayout(close_row)
@@ -1244,14 +1253,8 @@ def make_dialog_class():
             self.preload_check.setChecked(True)
             self.preload_check.setToolTip("Pre-tick EAs from the coverage field already in the MBI layer.")
             lay.addWidget(self.preload_check)
-            # Barangay mode: MBI layer from the MBI Barangay Selector (covering barangay chosen)
-            self.bgy_mode_check = QtWidgets.QCheckBox("Choose EAs inside the covering barangay")
-            self.bgy_mode_check.setToolTip(
-                f"For an MBI layer of the MBI Barangay Selector (has '{BGY_COVERAGE_FIELD}').\n"
-                "Each MBI is listed once per covering barangay chosen there, and only the EAs of\n"
-                "that barangay (from the ticked EA layers) that cover or border the MBI are offered.")
-            self.bgy_mode_check.toggled.connect(self._on_bgy_mode)
-            lay.addWidget(self.bgy_mode_check)
+            # Barangay mode is automatic: an MBI layer from the MBI Barangay Selector (has
+            # BGY_COVERAGE_FIELD) only offers the EAs of the covering barangay chosen there.
             self.bgy_opts = QtWidgets.QWidget()
             brow = QtWidgets.QHBoxLayout(self.bgy_opts)
             brow.setContentsMargins(18, 0, 0, 0)
@@ -1474,14 +1477,6 @@ def make_dialog_class():
             self.folder_hint = self._hint()
             gf.addWidget(self.folder_hint)
             arow = QtWidgets.QHBoxLayout()
-            self.auto_btn = button("Auto-Assign Pending", 32)
-            self.auto_btn.setToolTip(
-                "Single-EA cases go to that EA. Multi-EA cases go to the EA that owns most of\n"
-                "the buildings inside the MBI (needs Building Points + geocode field);\n"
-                "shared overlaps go to every EA with tagged buildings, most first, each keeping\n"
-                "its own part. No tagged buildings or a tie stays pending.\n"
-                "Same result as ticking the case rows, but only where the choice is clear.")
-            self.auto_btn.clicked.connect(self.auto_assign)
             self.reset_btn = button("Reset Choices", 32, BTN_CANCEL)
             self.reset_btn.setToolTip("Clear every case tick in the viewer (nothing is written).")
             self.reset_btn.clicked.connect(self.reset_choices)
@@ -1499,7 +1494,6 @@ def make_dialog_class():
                 "to a GeoPackage, plus a CSV of every case / EA decision, into the Export folder.\n"
                 "Choices not yet applied are applied first.")
             self.export_btn.clicked.connect(self.export_results)
-            arow.addWidget(self.auto_btn, 1)
             arow.addWidget(self.reset_btn, 1)
             arow.addWidget(self.apply_btn, 2)
             arow.addWidget(self.export_btn, 2)
@@ -1537,10 +1531,7 @@ def make_dialog_class():
 
         def _on_mbi_layer(self, layer):
             """A Barangay Selector layer switches barangay mode on (and off for other layers)."""
-            bgy = is_bgy_mbi_layer(layer)
-            self.bgy_mode_check.setEnabled(bgy)
-            self.bgy_mode_check.setChecked(bgy)
-            self._on_bgy_mode(bgy)
+            self._on_bgy_mode(is_bgy_mbi_layer(layer))
 
         def _on_bgy_mode(self, on):
             """Show the barangay-mode options and swap the default status field, so the
@@ -1555,7 +1546,7 @@ def make_dialog_class():
             self.validate_inputs()
 
         def bgy_mode_wanted(self):
-            return self.bgy_mode_check.isChecked() and is_bgy_mbi_layer(self.mbi_combo.currentLayer())
+            return is_bgy_mbi_layer(self.mbi_combo.currentLayer())
 
         def bldg_field(self):
             layer = self.bldg_combo.currentLayer()
@@ -1656,12 +1647,22 @@ def make_dialog_class():
                     pass
 
         def done(self, result):
-            self._teardown()
+            # Close / Esc only hides the window (work is resumed on reopen): just drop the
+            # map highlights. Signals are released with the window when QGIS exits.
+            self.clear_bands()
             super().done(result)
 
         def closeEvent(self, event):
-            self._teardown()
+            self.clear_bands()
             super().closeEvent(event)
+
+        def resume(self):
+            """Bring a hidden / minimized window back with its work intact."""
+            self.refresh_ea_list()
+            self.validate_inputs()
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
 
         # ──────────────── EA layer list (multi-select) ────────────────
         def _ea_items(self):
@@ -1869,7 +1870,6 @@ def make_dialog_class():
                       self.show_combo, self.clear_btn, self.mode_combo, self.bldg_field_combo,
                       self.gap_dist_spin):
                 w.setEnabled(not busy)
-            self.bgy_mode_check.setEnabled(not busy and is_bgy_mbi_layer(self.mbi_combo.currentLayer()))
             if busy:
                 self.progress.setValue(0)
                 QtWidgets.QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -3031,46 +3031,6 @@ def make_dialog_class():
             menu.addAction("Collapse all", self.tree.collapseAll)
             menu.exec_(self.tree.viewport().mapToGlobal(pos))
 
-        # ──────────────── auto-assign ────────────────
-        def auto_assign(self):
-            single = by_bldg = shared = left = 0
-            for case in self.cases.values():
-                if case.assigned or not case.candidates:
-                    continue
-                cands = list(case.candidates.values())
-                if len(cands) == 1:
-                    self.set_assignment(case, [cands[0].code], quiet=True)
-                    single += 1
-                elif not all(c.bldg is not None for c in cands):
-                    left += 1
-                elif case.split:
-                    # Every EA with tagged buildings keeps its part, most buildings first.
-                    owners = sorted((c for c in cands if c.bldg), key=lambda c: -c.bldg)
-                    if owners:
-                        self.set_assignment(case, [c.code for c in owners], quiet=True)
-                        shared += 1
-                    else:
-                        left += 1
-                else:
-                    most = max(c.bldg for c in cands)
-                    leaders = [c for c in cands if c.bldg == most]
-                    if most > 0 and len(leaders) == 1:
-                        self.set_assignment(case, [leaders[0].code], quiet=True)
-                        by_bldg += 1
-                    else:
-                        left += 1
-            partial = sum(1 for c in self.cases.values() if c.status == "partial")
-            self.log(f"Auto-assign: {single:,} single-EA case(s), {by_bldg:,} to the EA owning most "
-                     "of the buildings inside the MBI"
-                     + (f", {shared:,} shared overlap(s) to every EA with tagged buildings "
-                        "(each keeps its part)" if shared else "")
-                     + (f", {left:,} left pending (no tagged buildings, a tie, or no building "
-                        "counts)" if left else "")
-                     + (f". {partial:,} case(s) are only partly covered — review them "
-                        "(Show: Partly covered)." if partial else ""))
-            self.apply_filter()
-            self.on_selection_changed()
-
         # ──────────────── apply ────────────────
         def _case_status(self, case):
             return {"covered": STATUS_COVERED, "partial": STATUS_PARTIAL}.get(
@@ -3574,8 +3534,13 @@ def show_dialog():
     main = qgis_iface.mainWindow() if qgis_iface is not None else None
 
     if main is not None:
+        # Resume a window that was closed (hidden) or minimized, keeping its work.
         for old in main.findChildren(QDialog, DIALOG_NAME):
+            if hasattr(old, "resume"):
+                old.resume()
+                return old
             old.close()
+            old.deleteLater()
 
     dialog = make_dialog_class()(qgis_iface, main)
     dialog.show()
