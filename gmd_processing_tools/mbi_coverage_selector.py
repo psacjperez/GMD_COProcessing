@@ -79,8 +79,10 @@ HELP_HTML = f"""
         See <a href="#ea">EA Selector</a>.</td></tr>
     <tr><td {_TD}>From 1 to 2</td>
         <td>In the Barangay Selector click <b>Choose EAs in the EA Selector Tab →</b>. It applies any pending choices,
-        switches to the EA Selector tab and picks the same MBI layer and building points there. Tick the EA layers,
-        then click <b>Load MBI Cases</b>.</td></tr>
+        switches to the EA Selector tab and picks the same MBI layer and building points there; ticked barangay layers
+        that carry <i>ea_geocode</i> are pre-ticked as EA layers. It refuses when the <i>Coverage field</i> is not
+        <i>assigned_bgy</i>, or when no MBI is covered or partly covered yet. Tick the EA layers, then click
+        <b>Load MBI Cases</b>.</td></tr>
   </table>
 
   <div {_NOTE.format(c="#4b5563")}>
@@ -94,7 +96,8 @@ HELP_HTML = f"""
   <div {_NOTE.format(c="#2e7d32")}>
     <b style="color:#111827;">Closed It by Accident?</b>
     <b>Minimize</b> or <b>Close</b> only put the window away: open <i>MBI Coverage Selector</i> again and both tabs
-    come back as you left them — loaded cases, ticks and log (until QGIS is closed).
+    come back as you left them — loaded cases, ticks and log (until QGIS is closed); the layer lists are refreshed.
+    Switching tab clears the other tab's map highlights.
   </div>
 
   <!-- ═══════════════════════════ BARANGAY SELECTOR ═══════════════════════════ -->
@@ -112,7 +115,7 @@ HELP_HTML = f"""
     <li><b>Tick your Barangay Layers</b> — every layer the involved barangays come from.</li>
     <li>Click <b style="color:#2e7d32;">Load MBI Cases</b> (green). Every MBI of the MBI Layer is compared with the
         remaining MBIs, Disputed ones included; a <i>ppp_mbi</i> layer with the result is added and its cases are
-        listed.</li>
+        listed. <b>Cancel</b> stops a running load; <b>Clear</b> empties the viewer and the log.</li>
     <li>Read the <b>Detection</b> column: <b>Still detected</b>, <b>Newly detected</b> (the whole row is
         <b style="color:#558b2f;">light green</b>), <b>No longer detected</b> (grey, nothing to cover) or
         <b>Not checked</b> (blue-grey cell: the MBI Layer has no MBI of its type — still to be covered).</li>
@@ -175,7 +178,8 @@ HELP_HTML = f"""
         field</i> (auto: bgy_geocode, geocode, then ea_geocode) is the barangay's geocode <b>or starts with it</b>.
         Optional.</td></tr>
     <tr><td {_TD}>Barangay Layers</td>
-        <td>Click every barangay layer the involved barangays come from (matched on <i>geocode</i> /
+        <td>Click every barangay layer the involved barangays come from, or use <b>Select All</b> / <b>Clear</b>
+        (matched on <i>geocode</i> /
         <i>bgy_geocode</i>; names from <i>barangay</i> / <i>bgy_name</i> / <i>name</i>). Involved barangays none of
         the layers contain are shown in red. The barangay shapes are what <b>shared overlaps</b> are clipped
         to.</td></tr>
@@ -209,7 +213,8 @@ HELP_HTML = f"""
     <tr><td {_TD}>Shared overlap</td>
         <td>An overlap across <b>three or more</b> barangays whose layers are all ticked: tick several and each
         <b>✔ Covers its part (x% of the MBI)</b> — the MBI clipped to it. Where two ticked barangays contain the same
-        piece, the one <b>ticked first</b> keeps it. Others: <b>✖ Gives up</b> what the ticked ones keep.</td></tr>
+        piece, the one <b>ticked first</b> keeps it. A leftover of at most 0.5 m² or 0.1% of the MBI (whichever is
+        larger) counts as fully covered. Others: <b>✖ Gives up</b> what the ticked ones keep.</td></tr>
     <tr><td {_TD}>On the map</td>
         <td>Select a barangay row to see its part: <b style="color:#2e7d32;">green</b> = what it keeps,
         <b style="color:#1565c0;">dashed blue</b> = what it would keep if ticked. Select the case row to see every
@@ -226,9 +231,10 @@ HELP_HTML = f"""
         <td>Adds a <i>Barangays + MBI</i> layer: the ticked barangay layers plus one feature per kept MBI part, with
         the covering barangay's attributes, <b>bgy_part</b> = <i>MBI</i> / <b>is_mbi</b> = <i>1</i>, drawn
         <b style="color:#c51162;">hatched magenta</b>. Kept parts are cut out of the barangays that released
-        them.</td></tr>
+        them. Enabled only when barangay layers are ticked.</td></tr>
     <tr><td {_TD}>Export GPKG + CSV</td>
-        <td><i>ppp_mbi_&lt;date&gt;_&lt;time&gt;.gpkg</i> (the MBI layer, plus <i>mbi_bgy_joined</i>) and a CSV
+        <td><i>ppp_mbi_&lt;date&gt;_&lt;time&gt;.gpkg</i> (the MBI layer, plus <i>mbi_bgy_joined</i> when barangay
+        layers are ticked and kept parts exist) and a CSV
         decision log, in the <i>Export folder</i> (asked when empty). Pending choices are applied first.</td></tr>
   </table>
 
@@ -263,7 +269,8 @@ HELP_HTML = f"""
         is run here: the cases are only loaded.</li>
     <li><b>Tick your EA Layers</b> — the layers of the covering barangays' EAs.</li>
     <li>Optional: pick <b>Building Points</b> so each case and EA shows its building count.</li>
-    <li>Click <b style="color:#2e7d32;">Load MBI Cases</b> (green).</li>
+    <li>Click <b style="color:#2e7d32;">Load MBI Cases</b> (green). <b>Cancel</b> stops a running load;
+        <b>Clear</b> empties the viewer and the log.</li>
     <li><b>Tick the Role / Status box on the case row</b> — the EA(s) listed under it cover the MBI. An overlap
         across several EAs is <b>shared out</b> between them. To pick one EA yourself, <b>right-click its
         row</b>.</li>
@@ -276,17 +283,19 @@ HELP_HTML = f"""
         <td>The <i>ppp_mbi</i> layer of the Barangay Selector (needs <i>case_uuid</i>). Tick <i>Only selected MBI
         features</i> to load part of it and <i>Resume saved coverage choices</i> to pre-tick EAs already stored in
         it. A layer with <i>assigned_bgy</i> automatically lists each MBI under its covering barangay and offers only
-        that barangay's EAs. <b>EAs within … m of a gap</b>: how close an EA must be to a gap to be offered
-        (default 5 m).</td></tr>
+        that barangay's EAs. <b>EAs within … m of a gap</b> (shown only for a layer with <i>assigned_bgy</i>): how
+        close an EA must be to a gap to be offered (default 5 m); the same distance is used for an overlap that no
+        EA holds more than 0.5 m² of.</td></tr>
     <tr><td {_TD}>EA Layers</td>
-        <td>Click every EA layer the covering barangays' EAs come from (matched on <i>ea_geocode</i>). EAs none of
+        <td>Click every EA layer the covering barangays' EAs come from, or use <b>Select All</b> / <b>Clear</b>
+        (matched on <i>ea_geocode</i>). EAs none of
         the layers contain are shown in red. The EA shapes are what shared overlaps are clipped to.</td></tr>
     <tr><td {_TD}>Building Points</td>
         <td>Optional. <b>Case row:</b> building points inside the MBI. <b>EA rows:</b> the points whose <i>Geocode
         field</i> (auto: ea_geocode, then geocode) matches the EA.</td></tr>
     <tr><td {_TD}>Barangay name fallback</td>
         <td>A row with no barangay name gets it by its geocode from the other MBI rows, else from the ticked EA layers
-        (<i>barangay</i> / <i>bgy_name</i>).</td></tr>
+        (<i>barangay</i> / <i>bgy_name</i> / <i>brgy_name</i> / <i>barangay_name</i>).</td></tr>
   </table>
 
   <h3 {_H3}>Which EAs Are Offered</h3>
@@ -314,8 +323,10 @@ HELP_HTML = f"""
         tagged buildings, else the nearest). <b>Right-click an EA row</b> to override, or to add / remove one EA of a
         shared overlap.</td></tr>
     <tr><td {_TD}>Shared overlap</td>
-        <td>Each covering EA <b>✔ Covers its part</b>; where two contain the same piece, the EA with the largest part
-        keeps it. Others <b>✖ Give up</b> the parts kept. On the map: <b style="color:#2e7d32;">green</b> = kept,
+        <td>An overlap held by <b>two or more</b> EAs (more than 0.5 m² each) can be shared out. Each covering EA
+        <b>✔ Covers its part</b>; where two contain the same piece, the EA with the largest part keeps it. Right-click
+        <b>Add</b> puts the EA at the end of the order. A leftover of at most 0.5 m² or 0.1% of the MBI (whichever is
+        larger) counts as fully covered. Others <b>✖ Give up</b> the parts kept. On the map: <b style="color:#2e7d32;">green</b> = kept,
         <b style="color:#1565c0;">dashed blue</b> = would keep, <b style="color:#e65100;">orange</b> = kept by no
         EA yet.</td></tr>
   </table>

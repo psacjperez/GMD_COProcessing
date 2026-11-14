@@ -1,14 +1,15 @@
 r"""MBI Barangay Coverage — counter-check the remaining MBIs, then choose the covering barangay.
 
 The remaining MBIs (the gaps / overlaps the PSOs declared pending, e.g. the 'remaining_cases'
-layer of GEMMA's MBI Validator GeoPackage, Disputed cases included) are counter-checked with a
-fresh run of the built-in MBI Checker (a copy of GEMMA's MBI Checker v13 — GEMMA does not need
-to be installed) on the barangay layers:
+layer of GEMMA's MBI Validator GeoPackage, Disputed cases included) are counter-checked
+against the MBI Layer when Load MBI Cases is clicked (the Run Check box is hidden):
 
-  • Still detected     — the check still finds the remaining MBI (shares area with it).
-  • Newly detected     — the check finds an MBI that is not in the remaining layer
+  • Still detected     — an MBI of the MBI Layer shares area with the remaining MBI.
+  • Newly detected     — an MBI of the MBI Layer that is not in the remaining layer
                          (light green row in the preview).
-  • No longer detected — a remaining MBI the check does not find any more (nothing to cover).
+  • No longer detected — a remaining MBI no MBI of the MBI Layer matches (nothing to cover).
+  • Not checked        — a remaining MBI of a type the MBI Layer does not contain; still to
+                         be covered.
 
 Every detected MBI involves two or more barangays, possibly from different barangay layers.
 The preview lists each MBI with all of its involved barangays, so you can tick the barangay
@@ -25,22 +26,17 @@ Workflow:
   Step 1  Pick the Remaining MBI layer (or Browse GPKG… to load 'remaining_cases' from a
           ref_mbi_reviewed GeoPackage).
   Step 2  Select every barangay layer the involved barangays come from (one or more).
-  Step 3  Pick the building point layer (and its geocode field): the MBI Checker counts the
-          buildings inside each MBI, and per involved barangay the ones tagged to it are
-          counted (the field may hold the barangay geocode or an EA geocode that starts with it).
-  Step 4  Click Run Check & Counter-Check — runs the built-in MBI Checker on the selected barangay
-          layers, compares each detection with the remaining MBIs, adds one "ppp_mbi"
-          layer ('detection', 'ref_case_uuid', 'ref_status', 'ref_remarks') and lists its cases.
-          Or pick an existing MBI layer (needs 'case_uuid') and click Load MBI Cases.
-          'Skip within-barangay cases' leaves out cases that involve a single barangay.
+  Step 3  Pick the building point layer (and its geocode field): the buildings inside each
+          MBI are counted, and per involved barangay the ones tagged to it
+          (the field may hold the barangay geocode or an EA geocode that starts with it).
+  Step 4  Pick the MBI Layer (needs 'case_uuid') and click Load MBI Cases — compares each
+          MBI with the remaining MBIs, adds one "ppp_mbi" layer ('detection',
+          'ref_case_uuid', 'ref_mbi_type', 'ref_status', 'ref_remarks') and lists its cases.
   Step 5  Tick the Role / Status box of the covering barangay in each case.
           Shared overlaps: when an overlap runs across several barangays (and their layers
           are selected), more than one barangay can be ticked — each keeps only its own part
           of the overlap (the MBI clipped to that barangay, minus what a barangay ticked
           before it keeps). The case is Partly Covered until those parts fill the MBI.
-          Auto-Assign Pending: single-barangay cases go to that barangay, multi-barangay
-          cases go to the barangay owning most of the buildings inside the MBI (needs
-          Step 3); shared overlaps go to every barangay with tagged buildings, most first.
           No-longer-detected MBIs have nothing to cover and cannot be ticked.
   Step 6  Apply Coverage writes 'assigned_bgy' (covering barangay geocodes, comma-separated)
           into the MBI layer. No coverage status is written here — the EA Selector writes
@@ -51,10 +47,11 @@ Workflow:
           every kept MBI part added as its own feature carrying the covering barangay's attributes,
           flagged 'bgy_part' = 'MBI' / 'is_mbi' = 1 and drawn hatched magenta (kept parts are cut
           out of the barangay features, so released overlaps leave the other barangays).
-  Step 8  Export GPKG + CSV writes the processed MBI layer, the coverage parts, the joined
-          barangays and a decision log CSV into the Export folder (applying pending choices first).
-  Step 9  Choose EAs in EA Selector… applies pending choices and opens the EA Selector
-          with this layer in barangay mode: each MBI is listed under its covering barangay
+  Step 8  Export GPKG + CSV writes the processed MBI layer, the joined barangays
+          ('mbi_bgy_joined', when barangay layers are ticked and kept parts exist) and a
+          decision log CSV into the Export folder (applying pending choices first).
+  Step 9  Choose EAs in the EA Selector Tab → applies pending choices and switches to the
+          EA Selector tab with this layer picked (barangay mode): each MBI is listed under its covering barangay
           ('assigned_bgy') and only that barangay's EAs can be chosen to cover it.
 """
 # Not a menu entry of its own (file name starts with "_"): this is the "Barangay Selector" tab of

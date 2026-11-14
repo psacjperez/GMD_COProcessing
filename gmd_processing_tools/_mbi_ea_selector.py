@@ -28,22 +28,19 @@ Workflow:
           Otherwise only one EA can cover a case: the one holding most of the MBI (for a gap,
           the one with most tagged buildings, else the nearest). Right-click an EA row to
           pick another EA, add one to a shared overlap or mark the case pending.
-          Auto-Assign Pending: single-EA cases go to that EA, multi-EA cases go to the EA
-          owning most of the buildings inside the MBI (needs Step 2); shared overlaps go to
-          every EA with tagged buildings, most first.
-  Step 5  Apply Coverage writes 'assigned_ea' (covering EA codes, comma-separated),
-          'ea_role' (Covers / Releases, per row) and 'coverage_status' (1_Covered /
-          2_Not Covered / 3_Partially Covered, per case) into the MBI layer as unsaved,
+  Step 5  Apply Coverage writes 'assigned_ea' (covering EA codes, comma-separated) and
+          'coverage_status' (1_Covered / 2_Not Covered / 3_Partially Covered, per case) into
+          the MBI layer ('ea_role' is not written in barangay mode) as unsaved,
           undoable edits, and adds the temporary layer 'ppp_mbi_ea_clipped' (same fields as
           ppp_mbi): the covering barangay's row becomes one row per ticked EA, clipped to that
           EA (assigned_ea = that EA, 1_Covered); not-covered rows and leftovers are kept with
-          2_Not Covered. An old 'MBI Coverage Parts' layer is
-          removed. This tool is the only one that writes the coverage status.
+          2_Not Covered. Any 'MBI Coverage Parts' layer is
+          replaced. This tool is the only one that writes the coverage status.
   Step 6  Export GPKG + CSV writes the processed MBI layer, the coverage parts and a decision
           log CSV into the Export folder (applying any pending choices first).
 
 MBIs from the Barangay Selector ('ppp_mbi', has 'assigned_bgy'):
-  Picking such a layer ticks "Choose EAs inside the covering barangay". The covering barangay
+  Barangay mode is automatic for such a layer (no checkbox). The covering barangay
   chosen there decides which EAs can cover the MBI:
     • Each MBI is listed ONCE PER COVERING BARANGAY (a shared overlap is first clipped to each
       barangay — the MBI ∩ that barangay's EAs, minus what a barangay chosen before it keeps).
@@ -944,7 +941,7 @@ def make_panel_class():
 
             box, lay = group("MBI Results Layer")
             self.mbi_combo = layer_combo(polygon_filter)
-            self.mbi_combo.setToolTip("Gaps / Overlaps output of the EA MBI Checker.")
+            self.mbi_combo.setToolTip("The ppp_mbi layer of the Barangay Selector tab (with assigned_bgy).")
             lay.addWidget(self.mbi_combo)
             self.mbi_hint = self._hint()
             lay.addWidget(self.mbi_hint)
